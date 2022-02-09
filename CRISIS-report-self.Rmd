@@ -1,0 +1,475 @@
+---
+title: "CRISIS- Self Report"
+output: 
+  html_document:
+    self_contained: false
+tables: true
+---
+  
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("dplyr")
+library("stringr")
+library("reshape2")
+library("ggplot2")
+library("ggthemes")
+library("modelsummary")
+library("textclean")
+library("ggpubr")
+library("Rmisc")
+library("sjPlot")
+library("gridExtra")
+library("kableExtra")
+library("readxl")
+
+#Due to privacy reasons these files have not been released. 
+#The ones in github don't have PII information, therefore only year is included for dates
+dataDirectory="./data/"
+s_pre_during_mfq_df=read.csv(paste0(dataDirectory,"s_pre_during_mfq_df.csv"))
+s_pre_during_mfq_df=read.csv(paste0(dataDirectory,"s_pre_during_mfq_df.csv"))
+p_pre_during_mfq_df=read.csv(paste0(dataDirectory,"p_pre_during_mfq_df.csv"))
+s_pre_during_scared_df=read.csv(paste0(dataDirectory,"s_pre_during_scared_df.csv"))
+p_pre_during_scared_df=read.csv(paste0(dataDirectory,"p_pre_during_scared_df.csv"))
+
+date1=spring2019=as.Date("2019-03-11")
+spring2020=covidTime=as.Date("2020-03-11")
+analysisEndDate=as.Date("2021-03-11") 
+
+measureLabels=c("Depressive Symptoms", "Anxiety Symptoms")
+measureLabelsForPlots=c("Depressive Score (self report)","Anxiety Score (self report)")
+ylims=c(30, 30, 12, 12)
+baseFontSize=14
+
+source("./source/prepareDataset.R", local = knitr::knit_global())
+source("./source/prepareBehavioralDataSet.R", local = knitr::knit_global())
+
+ct1=read.csv(paste0(dataDirectory,"s_pandemic_mfq_and_crisis_df.csv")) #this is the same for scared
+behavioralData=prepareBehavioralDataSet(ct1)
+
+s_mfq=prepareDataSet(s_pre_during_mfq_df,"s_mfq")
+s_mfq = s_mfq %>% filter(s_mfq_tot < 27)
+s_scared=prepareDataSet(s_pre_during_scared_df,"s_scaredshort")
+
+s_mfq$Year=factor(s_mfq$Year, levels=c("2019","2020"),labels=c("Pre-Pandemic","Pandemic")) #this takes March into account, it's March 2019-2020 and 2020-2021. For more details look at prepareDateset.R
+s_scared$Year=factor(s_scared$Year, levels=c("2019","2020"),labels=c("Pre-Pandemic","Pandemic")) #this takes March into account
+
+#************** excluding subjects that had inpatient/outpatient visits ---------------------------------
+s_mfq_with_inout=s_mfq %>% filter(as.Date(measureDate) >= spring2019 & as.Date(measureDate) < analysisEndDate) %>% filter(grepl("^o", Clinical_Visit_Type) | grepl("^i", Clinical_Visit_Type))
+s_mfq_with_no_in_out=s_mfq %>% filter(!Participant %in% s_mfq_with_inout$Participant) #134
+s_mfq_with_in_out=s_mfq %>% filter(Participant %in% s_mfq_with_inout$Participant) #32
+
+s_scared_with_inout=s_scared %>% filter(as.Date(measureDate) >= spring2019 & as.Date(measureDate) < analysisEndDate) %>% filter(grepl("^o", Clinical_Visit_Type) | grepl("^i", Clinical_Visit_Type))
+s_scared_with_no_in_out=s_scared %>% filter(!Participant %in% s_scared_with_inout$Participant) #134
+
+
+#************** Make subgroups based on whether it's a ongoing MDD or not ------------------------------
+s_mfq$Clinical_Visit_Date=as.Date(s_mfq$Clinical_Visit_Date)
+lastVisitBeforeCovid=s_mfq %>% select(Participant, c_ksadsdx_primary_dx,c_ksadsdx_dx_detailed,Group, s_mfq_tot, s_mfq_date, Clinical_Visit_Date) %>% 
+  filter(!is.na(Clinical_Visit_Date) & Clinical_Visit_Date< covidTime)%>% arrange(Clinical_Visit_Date) %>% group_by(Participant) %>% slice(n())
+MDDgroup=lastVisitBeforeCovid %>% filter(Group=="MDD")
+
+history=MDDgroup %>% filter(c_ksadsdx_dx_detailed=="Hist_MDD" | c_ksadsdx_dx_detailed=="Sub_hist" | c_ksadsdx_dx_detailed=="Hist_Sub") #23
+history$Participant=droplevels(history$Participant)
+ongoing=MDDgroup %>% filter(c_ksadsdx_dx_detailed=="Full_MDD")
+ongoing$Participant=droplevels(ongoing$Participant)
+
+
+```
+
+### Question 1:  Has the COVID-19 pandemic impacted adolescent depression and anxiety symptoms?
+### Depressive Symptoms
+#### Q1- MFQ: Average depressive symptoms before and during the pandemic.
+```{r mfq-q1, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+q1lmeHVMDD=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_mfq, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(q1lmeHVMDD)
+tab_model(q1lmeHVMDD,dv.labels =c("Depressive Symptoms"))
+#differnet contrasts
+a=lmerTest::contest1D(q1lmeHVMDD, c(1,0,0,1,0),confint=TRUE) #to get just MDD before pandemic
+b=lmerTest::contest1D(q1lmeHVMDD, c(1,0,1,1,1),confint=TRUE) #to get just MDD after pandemic
+c=lmerTest::contest1D(q1lmeHVMDD, c(1,0,0,0,0),confint=TRUE) #HV before
+d=lmerTest::contest1D(q1lmeHVMDD, c(1,0,1,0,0),confint=TRUE) #HV after
+
+#effect size
+s_mfq_hv_before=s_mfq %>% filter(Year=="Pre-Pandemic" & Group=="HV")
+s_mfq_hv_after=s_mfq %>% filter(Year=="Pandemic" & Group=="HV")
+s_mfq_hv_before1=s_mfq_hv_before %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+s_mfq_hv_after1=s_mfq_hv_after %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+hvCohenD=(mean(s_mfq_hv_after1$avg)-mean(s_mfq_hv_before1$avg))/(sd(s_mfq_hv_after1$avg-s_mfq_hv_before1$avg))
+print("-------- Cohen's d for HV -----------")
+print(hvCohenD,digits=3)
+
+s_mfq_mdd_before=s_mfq %>% filter(Year=="Pre-Pandemic" & Group=="MDD")
+s_mfq_mdd_after=s_mfq %>% filter(Year=="Pandemic" & Group=="MDD")
+s_mfq_mdd_before1=s_mfq_mdd_before %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+s_mfq_mdd_after1=s_mfq_mdd_after %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+mddCohenD=(mean(s_mfq_mdd_after1$avg)-mean(s_mfq_mdd_before1$avg))/(sd(s_mfq_mdd_after1$avg-s_mfq_mdd_before1$avg))
+print("-------- Cohen's d for participants with MDD -----------")
+print(mddCohenD,digits=3)
+
+#type=int - interactions based on conditional mean, pred: based on conditional mean (conditioned on reference levels of factors), eff: based on marginal means (marginalized/averaged over the levels of factors)
+#Average of depressive symptoms before and during the pandemic
+mfqp1=sjPlot::plot_model(q1lmeHVMDD, show.intercept = TRUE, title="", type="pred",terms=c("Year","Group","Gender"),dodge = .2,axis.labels = "", legend.title = "")+ylim(c(-2,16))+theme_classic(base_size=baseFontSize)+ylab("Depressive Symptoms")+xlab(" ")+theme(axis.text.x=element_text(hjust=c(.3,.6)))
+mfqp1
+
+ggeffects::ggemmeans(q1lmeHVMDD, terms=c("Year", "Group","Gender"))
+
+```
+
+
+#### Q1-MFQ - part b: Trajectory of depressive symptoms before and during the pandemic for MDD participants. 
+```{r mfq-q2, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+smqf2020N=s_mfq%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=smqf2020N %>% filter(n < 2)
+smfqTraj=s_mfq%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant))#59
+
+mfqq2lme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=smfqTraj, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+sjPlot::tab_model(mfqq2lme,dv.labels= "Depressive Symptoms")
+a=lmerTest::contest1D(mfqq2lme, c(0,0,1,0,1),confint=TRUE) #to get just MDD
+print("Slope of the trajectory during the pandemic (Time + Time * Year [Pandemic]")
+print(a, digits=3)
+
+mfqp2=sjPlot::plot_model(mfqq2lme, show.intercept = TRUE, title="", type="pred",terms=c("Time","Year","Gender"),colors=c("darkgreen","purple"), legend.title="") 
+mfqp2=mfqp2+ylab("Depressive Symptoms")+xlim(c(0,12))+ylim(c(-2,18))+scale_x_discrete(name ="", 
+                    limits=c("April","May","June","July","August","September","October","November","December","January","February"))
+mfqp2=mfqp2+ theme_classic(base_size=16) + theme(axis.text.x = element_text(angle=90))
+mfqp2
+
+
+```
+
+### Anxiety Symptoms - Anxiety Symptoms
+####Q1- SCARED: Average anxiety symptoms before and during the pandemic.
+##### HV and MDD together
+```{r scared-q1, eval=TRUE, echo=FALSE, warning=FALSE} 
+scaredq1lmeHVMDD=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_scared, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(scaredq1lmeHVMDD)
+a=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,0,0,0),confint=TRUE) #HV before
+b=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,1,0,0),confint=TRUE) #HV after
+c=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,0,1,0),confint=TRUE) #to get just MDD
+d=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,1,1,0),confint=TRUE) #to get just MDD
+
+sjPlot::tab_model(scaredq1lmeHVMDD,dv.labels= "Anxiety Symptoms")
+
+scaredp1=sjPlot::plot_model(scaredq1lmeHVMDD, show.intercept = TRUE, title="",legend.title = "",dodge = .2, type="pred",terms=c("Year","Group","Gender"))+ylim(c(-.5,4.5))+theme_classic(base_size=baseFontSize)+ylab("Anxiety Symptoms")+xlab(" ") +theme(axis.text.x=element_text(hjust=c(.3,.6)))
+scaredp1
+
+ggeffects::ggemmeans(q1lmeHVMDD, terms=c("Year", "Group","Gender"))
+
+```
+
+#### Q1-SCARED part b: Trajectory of anxiety symptoms before and during the pandemic for MDD participants. 
+```{r scared-q2, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+sscared2020N=s_scared%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=sscared2020N %>% filter(n < 2)
+sscaredTraj=s_scared%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant))
+
+a=sscaredTraj %>% group_by(Participant) %>% slice(1)
+
+scaredq2lme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=sscaredTraj,control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(scaredq2lme)
+sjPlot::tab_model(scaredq2lme,dv.labels= "Anxiety Symptoms")
+a=lmerTest::contest1D(scaredq2lme, c(0,0,1,0,1),confint=TRUE) #to get slope during pandemic
+print("Slope during the pandemic (Time + Time * Year [Pandemic])")
+print(a, digits=3)
+
+scaredp2=plot_model(scaredq2lme, title="", type="pred", terms=c("Time","Year", "Gender"),colors=c("darkgreen","purple"), legend.title="")+ylab("Anxiety Symptoms")+xlim(c(0,12.5))+ylim(c(-.5,4.5))+scale_x_discrete(name ="", 
+                    limits=c("April","May","June","July","August","September","October","November","December","January","February"))
+scaredp2=scaredp2+ theme_classic(base_size=16) + theme(axis.text.x = element_text(angle=90))
+scaredp2
+
+```
+
+
+#### Q1- Average MFQ and SCARED for HV and MDD: Comparision of depression and anxiety symptoms between healthy and depressed participants.
+```{r mfq-scared-q1, eval=TRUE, echo=FALSE, warning=FALSE} 
+tab_model(q1lmeHVMDD,scaredq1lmeHVMDD, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="self-mfq-scared-q1part1-female-male.html")
+
+```
+
+#### Q1- Trajecotry of MFQ and SCARED for MDD: Comparision of depression and anxiety symptoms of depressed participants before and during the pandemic.
+```{r mfq-scared-q2, eval=TRUE, echo=FALSE, warning=FALSE} 
+tab_model(mfqq2lme,scaredq2lme, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="self-mfq-scared-q1part2-female-male.html")
+
+```
+
+### Question 2: How have behaviors and worries changed over time during the pandemic?
+```{r q2, eval=TRUE, echo=FALSE, warning=FALSE}
+
+behavioralDataN=behavioralData%>%group_by(Participant) %>% dplyr::count(.)
+ParticipantLessThan2=behavioralDataN %>% filter(n < 2)
+
+behavioralData2=behavioralData %>% filter(!Participant %in% ParticipantLessThan2$Participant)
+behavioralData2n=behavioralData2 %>% group_by(Participant,Group) %>% dplyr::count()
+behavioralData2nHV= behavioralData2n%>%filter(Group=="HV")
+behavioralData2nMDD=behavioralData2n%>%filter(Group=="MDD")
+
+behavioralData2nSummary=rbind(summary(behavioralData2nHV$n),summary(behavioralData2nMDD$n))
+rownames(behavioralData2nSummary)=c("HV","MDD")
+
+models <- list()
+sleepmodels=list()
+#Lme with waves as continuse var - number of months since pandemic to match the rest of lmes
+varnames=c("s_mfq_tot","s_scared_combined_tot","s_worry_total", "s_crisis_28_sleep1", "s_crisis_28_sleep2", "s_crisis_29_exercise", "s_crisis_30_outdoors", "s_crisis_19_relationships_family", "s_crisis_21_relationships_friends","s_crisis_43_video_games", "s_crisis_42_soc_media","s_crisis_41_tv")
+labels=c("MFQ","SCARED","Worry", "Sleep < 6", "Sleep > 10", "Exercise", "Time Spent Outdoors", "Family Relationship", "Friends Relationship","Time Spent Playing Video Games", "Social Media","TV")
+
+#since already done mfq/scared above
+for(i in 3:length(varnames)){
+
+  y=varnames[i]
+  modellabel=labels[i]
+  someData2=behavioralData %>% filter(!Participant %in% ParticipantLessThan2$Participant) %>% select(Participant, Gender, Group, s_crisis_date,y=varnames[i])
+  someData2$s_crisis_date=as.Date(someData2$s_crisis_date)
+  someData2$Time=as.numeric(someData2$s_crisis_date - covidTime)/30.5
+
+  someData2 = someData2 %>% filter(!is.na(y) & !is.na(Time) & !is.na(Gender) & !is.na(Group))
+
+  someData2$y=as.numeric(someData2$y)
+  someData2$Gender=toupper(someData2$Gender)
+  someData2$Gender=as.factor(someData2$Gender)
+  someData2$Participant=as.factor(someData2$Participant)
+  divider="####### LME with Wave Summary ##############"
+
+  if(y=="s_crisis_28_sleep1" | y=="s_crisis_28_sleep2"){
+
+      lmeWave=lme4::glmer(y~Gender+Group*Time+ (1|Participant), family="binomial", data=someData2, control=lme4::glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+      sleepmodels[[modellabel]]=lmeWave #skipping sleep here as the interpretation of model parameters would be different
+
+  }else{
+
+    lmeWave=lmerTest::lmer(y~Gender+Group*Time+ (1+Time|Participant), data=someData2, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+    models[[modellabel]]=lmeWave
+
+  }
+
+}
+
+#the ones with p values less than .005 (0.05 bonferroni corrected -> 0.005) are considered significant in the paper
+tab_model(models$Worry, models$`Family Relationship`,show.re.var=FALSE,string.pred=" ",dv.labels=c("Worry", "Family Relationship"), file="self-worry-family-2time-points.html")
+tab_model(models$`Time Spent Playing Video Games`, models$TV, models$`Social Media`,show.re.var=FALSE,string.pred=" ",dv.labels =c("Time spent playing video Games","Time Spent watching TV","Time spent on social media"), file="self-tv-media-2time-points.html")
+
+#supplemental Table
+tab_model(models$`Friends Relationship`,models$Exercise, models$`Time Spent Outdoors`,sleepmodels$`Sleep < 6`, sleepmodels$`Sleep > 10`, show.re.var=FALSE,string.pred=" ",dv.labels=c("Friend Relationship","Exercise","Time Spent outdoors","Sleep < 6 hours", "Sleep > 10 hours"),file="self-behavior-supplemental-table.html")
+
+```
+
+### Sensitivity analysis
+##### HV vs. MDD current vs. MDD past
+```{r mfq-s4, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+s_mfq_mdd=s_mfq %>% filter(Group=="MDD")
+s_mfq_mdd=s_mfq_mdd %>% mutate(Group=ifelse(Participant %in% ongoing$Participant,"ongoingMDD","RestOfMDD"))
+s_mfq_hv_mdd3=rbind(s_mfq_mdd,s_mfq %>% filter(Group=="HV"))
+s_mfq_hv_mdd3$Group=as.factor(s_mfq_hv_mdd3$Group)  
+numbers=s_mfq_hv_mdd3 %>% dplyr::count(Group, Participant)
+
+q1lmeMDD3=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_mfq_hv_mdd3, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+#scared
+s_scared_mdd=s_scared %>% filter(Group=="MDD")
+s_scared_mdd=s_scared_mdd %>% mutate(Group=ifelse(Participant %in% ongoing$Participant,"ongoingMDD","RestOfMDD"))
+s_scared_hv_mdd3=rbind(s_scared_mdd,s_scared %>% filter(Group=="HV"))
+s_scared_hv_mdd3$Group=as.factor(s_scared_hv_mdd3$Group)
+numbers=s_scared_hv_mdd3 %>% dplyr::count(Group, Participant)
+
+q1lmeMDD3Scared=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_scared_hv_mdd3, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+tab_model(q1lmeMDD3,q1lmeMDD3Scared, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="sensitivityAnalysis-mfq-scared-current-past-MDD-and-HV.html")
+
+g1=lmerTest::contest1D(q1lmeMDD3, c(0,0,0,0,0,1,-1),confint=TRUE)
+print("----Contrast for comparing Ongoing MDD vs. Rest of MDD interaction terms for Depressive Symptoms ")
+print(g1,digits=3)
+
+g2=lmerTest::contest1D(q1lmeMDD3Scared, c(0,0,0,0,0,1,-1),confint=TRUE)
+print("----Contrast for comparing Ongoing MDD vs. Rest of MDD interaction terms for Anxiety Symptoms ")
+print(g2,digits=3)
+
+```
+
+
+### CBT
+#how many CBT before and during COVID
+```{r mfq-cbt, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+outduring=s_mfq %>% filter(as.Date(measureDate) >= covidTime & as.Date(measureDate) < analysisEndDate) %>% filter(grepl("^o", Clinical_Visit_Type))
+induring=s_mfq %>% filter(as.Date(measureDate) >= covidTime & as.Date(measureDate) < analysisEndDate) %>% filter(grepl("^i", Clinical_Visit_Type))
+
+outpre=s_mfq %>% filter(as.Date(measureDate) >= spring2019 & as.Date(measureDate) < covidTime) %>% filter(grepl("^o", Clinical_Visit_Type))
+inpre=s_mfq %>% filter(as.Date(measureDate) >= spring2019 & as.Date(measureDate) < covidTime) %>% filter(grepl("^i", Clinical_Visit_Type))
+
+cbtpre=union(outpre$Participant,inpre$Participant)
+cbtpost=union(outduring$Participant,induring$Participant)
+op=union(outpre$Participant,outduring$Participant)
+ip=union(inpre$Participant,induring$Participant)
+
+cbt=matrix(NA, nrow=2,ncol=2)
+colnames(cbt)=c("before pandemic","continued or started after the pandemic")
+rownames(cbt)=c("inpatient","CBT")
+cbt[1,]=c(length(unique(inpre$Participant)),length(unique(induring$Participant))) #1 common in inpre/induring
+cbt[2,]=c(length(unique(outpre$Participant)),length(unique(outduring$Participant))) #2 common in outpre/outduring
+p=kable(cbt,format = "html", full_width = T,font_size = 12,position = "left")
+
+print(paste("Total number of participants that participated in CBT during March 2019-March 2021 - some participated in both inpatient and outpatient: ",length(union(ip,op))))
+print(paste("Total number of participants that participated in CBT prior to the start of the pandemic:",length(cbtpre)))
+print(paste("Total number of participants that continued CBT or started CBT after the pandemic:",length(cbtpost)))
+
+```
+
+
+#### Sensitivity Analysis- Comparision of depression and anxiety symptoms between healthy and depressed participants excluding subjects with inpatient/outpatient treatment.
+```{r mfq-q1b, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+q1lmeHVMDDsen=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_mfq_with_no_in_out, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+
+#effect size
+s_mfq_hv_before=s_mfq_with_no_in_out %>% filter(Year=="Pre-Pandemic" & Group=="HV")
+s_mfq_hv_after=s_mfq_with_no_in_out %>% filter(Year=="Pandemic" & Group=="HV")
+s_mfq_hv_before1=s_mfq_hv_before %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+s_mfq_hv_after1=s_mfq_hv_after %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+hvCohensD=(mean(s_mfq_hv_after1$avg)-mean(s_mfq_hv_before1$avg))/(sd(s_mfq_hv_after1$avg-s_mfq_hv_before1$avg))
+
+s_mfq_mdd_before=s_mfq_with_no_in_out %>% filter(Year=="Pre-Pandemic" & Group=="MDD")
+s_mfq_mdd_after=s_mfq_with_no_in_out %>% filter(Year=="Pandemic" & Group=="MDD")
+s_mfq_mdd_before1=s_mfq_mdd_before %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+s_mfq_mdd_after1=s_mfq_mdd_after %>% group_by(Participant) %>% dplyr::summarize(avg=mean(s_mfq_tot))
+mddCohenD=(mean(s_mfq_mdd_after1$avg)-mean(s_mfq_mdd_before1$avg))/(sd(s_mfq_mdd_after1$avg-s_mfq_mdd_before1$avg))
+
+#differnet contrasts
+a=lmerTest::contest1D(q1lmeHVMDDsen, c(1,0,0,1,0),confint=TRUE) #to get just MDD before pandemic
+b=lmerTest::contest1D(q1lmeHVMDDsen, c(1,0,1,1,1),confint=TRUE) #to get just MDD after pandemic
+c=lmerTest::contest1D(q1lmeHVMDDsen, c(1,0,0,0,0),confint=TRUE)
+d=lmerTest::contest1D(q1lmeHVMDDsen, c(1,0,1,0,0),confint=TRUE)
+
+e=lmerTest::contest1D(q1lmeHVMDDsen, c(0,0,1,0,1),confint=TRUE) #MDD after - MDD before
+
+scaredq1lmeHVMDDsen=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=s_scared_with_no_in_out, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(scaredq1lmeHVMDDsen)
+#tab_model(scaredq1lmeHVMDDsen,dv.labels =c("Anxiety Symptoms"))
+a=lmerTest::contest1D(scaredq1lmeHVMDDsen, c(1,0,0,0,0),confint=TRUE) #HV before
+b=lmerTest::contest1D(scaredq1lmeHVMDDsen, c(1,0,1,0,0),confint=TRUE) #HV after
+c=lmerTest::contest1D(scaredq1lmeHVMDDsen, c(1,0,0,1,0),confint=TRUE) #to get just MDD
+d=lmerTest::contest1D(scaredq1lmeHVMDDsen, c(1,0,1,1,0),confint=TRUE) #to get just MDD
+
+tab_model(q1lmeHVMDDsen,scaredq1lmeHVMDDsen, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="sensitivity-analysis-self-hv-mdd-mfq-scared-q1part1-female-male.html")
+
+mfqp1=sjPlot::plot_model(q1lmeHVMDDsen, show.intercept = TRUE, title="", type="pred",terms=c("Year","Group","Gender"),dodge = .2,axis.labels = "", legend.title = "")+ylim(c(-2,16))+theme_classic(base_size=baseFontSize)+ylab("Depressive Symptoms")+xlab(" ")+theme(axis.text.x=element_text(hjust=c(.3,.6)))
+mfqp1
+
+scaredp1=sjPlot::plot_model(scaredq1lmeHVMDDsen, show.intercept = TRUE, title="",legend.title = "",dodge = .2, type="pred",terms=c("Year","Group","Gender"))+ylim(c(-.5,4.5))+theme_classic(base_size=baseFontSize)+ylab("Anxiety Symptoms")+xlab(" ") +theme(axis.text.x=element_text(hjust=c(.3,.6)))
+scaredp1
+
+```
+
+#### Q1-MFQ - part c - Sensitivity Analysis: Trajectory of depressive symptoms before and during the pandemic for MDD participants with no inpatient/outpatient visit. 
+
+```{r mfq-q2b, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+smqf2020N=s_mfq_with_no_in_out%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=smqf2020N %>% filter(n < 2)
+smfqTraj=s_mfq%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant)) %>% filter(Participant %in% s_mfq_with_no_in_out$Participant)
+
+mfq2blme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=smfqTraj, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(mfq2blme)
+sjPlot::tab_model(mfq2blme,dv.labels= "Depressive Symptoms")
+print("Slope during the pandemic: Time + Time * Year [Pandemic]: ")
+a=lmerTest::contest1D(mfq2blme, c(0,0,1,0,1),confint=TRUE) #to get slope during the pandemic
+print(a, digits=3)
+
+mfqp2b=sjPlot::plot_model(mfq2blme, show.intercept = TRUE, title="", type="pred",terms=c("Time","Year","Gender"),colors=c("darkgreen","purple"), legend.title="") 
+mfqp2b=mfqp2b+xlab("Months since March")+ylab("Depressive Symptoms")+xlim(c(0,12.5))+ylim(c(-2,18))+scale_x_discrete(name ="", 
+                    limits=c("April","May","June","July","August","September","October","November","December","January","February"))
+mfqp2b=mfqp2b+ theme_classic(base_size=16) + theme(axis.text.x = element_text(angle=90))
+mfqp2b
+
+
+```
+
+#### Q1-SCARED b - Sensitivity Analysis: Trajectory of anxiety symptoms before and during the pandemic for MDD participants excluding subjects with inpatient/outpatient visits. 
+```{r scared-q3b, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+sscared2020N=s_scared%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=sscared2020N %>% filter(n < 2)
+sscaredTraj=s_scared%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant))%>% filter(Participant %in% s_mfq_with_no_in_out$Participant)
+
+a=sscaredTraj %>% group_by(Participant) %>% slice(1)
+
+scaredq2blme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=sscaredTraj,control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+#summary(scaredq2blme)
+sjPlot::tab_model(scaredq2blme,dv.labels= "Anxiety Symptoms")
+print("Slope during the pandemic (Time + Time * Year [Pandemic]) ")
+a=lmerTest::contest1D(scaredq2blme, c(0,0,1,0,1),confint=TRUE) #to get just MDD
+print(a, digits=3)
+
+scaredp2b=plot_model(scaredq2blme, title="", type="pred", terms=c("Time","Year", "Gender"),colors=c("darkgreen","purple"), legend.title="")+xlab("Months since March")+ylab("Anxiety Symptoms")+xlim(c(0,12.5))+ylim(c(-.5,4.5))+scale_x_discrete(name ="", limits=c("April","May","June","July","August","September","October","November","December","January","February")) 
+scaredp2b=scaredp2b+ theme_classic(base_size=16) + theme(axis.text.x = element_text(angle=90))
+scaredp2b
+
+#?convergence
+# fm1.all <- lme4::allFit(scaredq2blme)
+# ss=summary(fm1.all)
+# ss$fixef
+
+```
+
+### Comparision of MDD trajectory pre and during the pandemic, excluding subjects who participated in inpatient or outpatient treatment
+```{r mfq-scared-sen, eval=TRUE, echo=FALSE, warning=FALSE,message=FALSE}
+tab_model(mfq2blme,scaredq2blme, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="self-mfq-scared-q1part2b-female-male.html")
+
+```
+
+```{r mfq-scared-q3b, eval=TRUE, echo=FALSE, warning=FALSE} 
+ggsave("self-mfq-scared-plots-female-male-2subplots-without-in-outpatient-v2.png", arrangeGrob(mfqp2b, scaredp2b, nrow=1,widths=c(20,20), heights=c(15)), width=15, height=5)
+```
+
+### Histograms of measures
+```{r mfq-scared-crisis, eval=TRUE, echo=FALSE, warning=FALSE,message=FALSE}
+
+#**************** Histograms of MFQ measures for pre and during pandemic for HV -------------------------------------
+before=s_mfq %>% filter(Group=="HV" & Year=="Pre-Pandemic") 
+after=s_mfq %>%  filter(Group=="HV" & Year=="Pandemic") 
+beforeCountHV=before %>% group_by(Participant) %>% dplyr::count()
+print("----Summary of MFQs for HVs, Pre-Pandemic")
+print(summary(beforeCountHV$n))
+afterCountHV=after %>% group_by(Participant) %>% dplyr::count()
+print("----Summary of MFQs for HVs, During Pandemic")
+print(summary(afterCountHV$n))
+qplot(beforeCountHV$n, geom="histogram", fill=I("lightblue"),col=I("lightblue"),alpha=I(.5),ylab ="Number of Participants",xlab="Number of Depressive Symptoms Ratings",main="HV Pre-Pandemic",show.legend = FALSE, xlim=c(0,30), ylim=c(0,60))+theme_classic(base_size = 18)
+#ggsave("HV-pre.png", height=5, width=6)
+qplot(afterCountHV$n, geom="histogram", fill=I("lightblue"),col=I("lightblue"),alpha=I(.5),ylab ="Number of Participants",xlab="Number of Depressive Symptoms Ratings",main="HV During Pandemic",show.legend = FALSE, xlim=c(0,30), ylim=c(0,60))+theme_classic(base_size = 18)
+#ggsave("HV-during.png", height=5, width=6)
+
+#**************** Histograms of MFQ measures for pre and during pandemic for MDD --------------------------------------
+before=s_mfq %>% filter(Group=="MDD" & Year=="Pre-Pandemic") 
+after=s_mfq %>%  filter(Group=="MDD" & Year=="Pandemic") 
+beforeCountMDD=before %>% group_by(Participant) %>% dplyr::count()
+print("----Summary of MFQs for MDD Group, Pre-Pandemic")
+print(summary(beforeCountMDD$n))
+afterCountMDD=after %>% group_by(Participant) %>% dplyr::count()
+print("----Summary of MFQs for MDD Group, During Pandemic")
+print(summary(afterCountMDD$n))
+qplot(beforeCountMDD$n, geom="histogram", fill="red",col=I("red"),alpha=I(.5),ylab ="Number of Participants",xlab="Number of Depressive Symptoms Ratings",main="MDD Pre-Pandemic",show.legend = FALSE, xlim=c(0,30), ylim=c(0,60))+theme_classic(base_size = 18)
+#ggsave("MDD-pre.png", height=5, width=6)
+qplot(afterCountMDD$n, geom="histogram", fill="red",col=I("red"),alpha=I(.5),ylab ="Number of Participants",xlab="Number of Depressive Symptoms Ratings",main="MDD During Pandemic",show.legend = FALSE, xlim=c(0,30), ylim=c(0,60))+theme_classic(base_size = 18)
+#ggsave("MDD-during.png", height=5, width=6)
+
+#**************** Histograms of CRISIS for HV and MDD --------------------------------------------------
+behavioralData2=behavioralData %>% filter(!is.na(s_crisis_date)) %>% group_by(Participant,Group) %>% dplyr::count()
+behavioralData2HV= behavioralData2%>%filter(Group=="HV")
+behavioralData2MDD=behavioralData2%>%filter(Group=="MDD")
+print("----Summary of CRISIS for HVs")
+summary(behavioralData2HV$n)
+print("----Summary of CRISIS for HVs")
+summary(behavioralData2MDD$n)
+behavioralData2Summary=rbind(summary(behavioralData2HV$n),summary(behavioralData2MDD$n))
+rownames(behavioralData2Summary)=c("HV","MDD")
+ggplot(aes(n),data=behavioralData2HV)+geom_bar(fill="lightblue")+xlab("Number of CRISIS ")+ylab("Number of Participants")+ylim(c(0,23))+theme_classic(base_size = 20)+ggtitle("HV During Pandemic")
+#ggsave("HV-crisis.png", height=5, width=6)
+ggplot(aes(n),data=behavioralData2MDD)+geom_bar(fill="indianred1")+xlab("Number of CRISIS ")+ylab("Number of Participants")+ylim(c(0,23))+theme_classic(base_size = 20)+ggtitle("MDD During Pandemic")
+#ggsave("MDD-crisis.png", height=5, width=6)
+
+
+```
