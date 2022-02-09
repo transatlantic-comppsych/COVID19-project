@@ -1,0 +1,195 @@
+---
+title: "CRISIS- Parent Report"
+output: 
+  html_document:
+    self_contained: false
+tables: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library("dplyr")
+library("stringr")
+library("reshape2")
+library("ggplot2")
+library("ggthemes")
+library("modelsummary")
+library("ggpubr")
+library("textclean")
+library("Rmisc")
+library("sjPlot")
+library("gridExtra")
+library("kableExtra")
+
+#Due to privacy reasons these files have not been released. 
+#The ones in github don't have PII information, therefore only year is included for dates
+p_pre_during_mfq_df=read.csv("../CRISIS/important_dataframes/p_pre_during_mfq_df.csv")
+p_pre_during_scared_df=read.csv("../CRISIS/important_dataframes/p_pre_during_scared_df.csv")
+
+date1=as.Date("2019-03-11")
+covidTime=as.Date("2020-03-11")
+spring2020=as.Date("2020-03-11")
+analysisEndDate=as.Date("2021-03-11") 
+
+measureLabels=c("Parent MFQ","Parent SCARED")
+measureLabelsForPlots=c("Depression Score (parent report)", "Anxiety Score (parent report)")
+ymax=c(14,4)
+baseFontSize=14
+
+source("./source/prepareDataset.R", local = knitr::knit_global())
+source("./source/prepareBehavioralDataSet.R", local = knitr::knit_global())
+
+ct1=read.csv("../CRISIS/important_dataframes/p_pandemic_mfq_and_crisis_df.csv") #this contains the data for scared too
+behavioralData=prepareBehavioralDataSet(ct1)
+crisis2N=behavioralData%>%group_by(Participant) %>% dplyr::count(.)%>%filter(n>1)
+behavioralData2020=behavioralData%>%filter(Participant %in% crisis2N$Participant)
+
+p_mfq=prepareDataSet(p_pre_during_mfq_df,"p_mfq")
+p_mfq = p_mfq %>% filter(p_mfq_tot < 27)
+p_scared=prepareDataSet(p_pre_during_scared_df,"p_scaredshort")
+
+p_mfq$Year=factor(p_mfq$Year, levels=c("2019","2020"),labels=c("Pre-Pandemic","Pandemic"))
+p_scared$Year=factor(p_scared$Year, levels=c("2019","2020"),labels=c("Pre-Pandemic","Pandemic"))
+```
+
+
+```{r pmfq-q1, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+q1lmeHVMDD=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=p_mfq, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+a=lmerTest::contest1D(q1lmeHVMDD, c(1,0,0,1,0),confint=TRUE) #to get just MDD before pandemic
+b=lmerTest::contest1D(q1lmeHVMDD, c(1,0,1,1,1),confint=TRUE) #to get just MDD after pandemic
+c=lmerTest::contest1D(q1lmeHVMDD, c(1,0,0,0,0),confint=TRUE)
+d=lmerTest::contest1D(q1lmeHVMDD, c(1,0,1,0,0),confint=TRUE)
+
+#type=int - interactions based on conditional mean, pred: based on conditional mean (conditioned on reference levels of factors), eff: based on marginal means (marginalized/averaged over the levels of factors)
+#Average of depressive symptoms before and during the pandemic
+mfqp1=sjPlot::plot_model(q1lmeHVMDD, show.intercept = TRUE, title="", type="pred",terms=c("Year","Group","Gender"),dodge = .2,axis.labels = "", legend.title = "")+ylim(c(-2,16))+theme_classic(base_size=baseFontSize)+ylab("Depressive Symptoms")+xlab(" ")+theme(axis.text.x=element_text(hjust=c(.3,.6)))
+
+```
+
+```{r pmfq-q2, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+smqf2020N=p_mfq%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=smqf2020N %>% filter(n < 2)
+smfqTraj=p_mfq%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant))
+
+mfqq2lme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=smfqTraj) 
+
+#Comparison of depressive symptoms of MDD participants before and during the pandemic
+mfqp2=sjPlot::plot_model(mfqq2lme, show.intercept = TRUE, title="", type="pred",terms=c("Time","Year","Gender"),colors=c("darkgreen","purple"), legend.title = "") 
+mfqp2=mfqp2+xlab("Months since March")+ylab("Depressive Symptoms")+xlim(c(0,12.5))+ylim(c(-2,ymax[1]))+theme_classic(base_size=baseFontSize)
+mfqp2=mfqp2+scale_x_discrete(name ="", 
+                    limits=c("April","May","June","July","August","September","October","November","December","January","February"))
+mfqp2=mfqp2+ theme(axis.text.x = element_text(angle=90))
+
+```
+
+
+```{r pscared-q1, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+scaredq1lmeHVMDD=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=p_scared, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+a=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,0,1,0),confint=TRUE) #to get just MDD before pandemic
+b=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,1,1,1),confint=TRUE) #to get just MDD after pandemic
+c=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,0,0,0),confint=TRUE)
+d=lmerTest::contest1D(scaredq1lmeHVMDD, c(1,0,1,0,0),confint=TRUE)
+
+p_scared2=p_scared
+p_scared2$Group=gsub("MDD","aMDD",p_scared2$Group)
+scaredq1lmeHVMDD2=lmerTest::lmer(measureName~Gender+Year*Group+(1+Year|Participant), data=p_scared2, control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+#type=int - interactions based on conditional mean, pred: based on conditional mean (conditioned on reference levels of factors), eff: based on marginal means (marginalized/averaged over the levels of factors)
+#Average of anxiety symptoms before and during the pandemic
+scaredp1=sjPlot::plot_model(scaredq1lmeHVMDD, show.intercept = TRUE, title="",legend.title = "",dodge = .2, type="pred",terms=c("Year","Group","Gender"))+ylim(c(-.5,4.5))+theme_classic(base_size=baseFontSize)+ylab("Anxiety Symptoms")+xlab(" ") +theme(axis.text.x=element_text(hjust=c(.3,.6)))
+#scaredp1
+
+```
+
+
+```{r pq2, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+
+smqf2020N=p_scared%>%group_by(Participant, Year) %>% dplyr::count(.)
+ParticipantLessThan2=smqf2020N %>% filter(n < 2)
+smfqTraj=p_scared%>%filter(Group=="MDD" & !(Participant %in% ParticipantLessThan2$Participant))
+
+a=smfqTraj %>% group_by(Participant) %>% slice(1)
+
+scaredq2lme=lmerTest::lmer(measureName~Gender+Time*Year+(1+Time*Year|Participant), data=smfqTraj,control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+
+#Comparision of anxiety symptoms of MDD participants before and during the pandemic
+scaredp2=plot_model(scaredq2lme, title="", type="pred", terms=c("Time","Year", "Gender"),colors=c("darkgreen","purple"), legend.title="")+ylab("Anxiety Symptoms")+xlim(c(0,12.5))+ylim(c(-.5,ymax[2]))+theme_classic(base_size=baseFontSize)
+scaredp2=scaredp2+scale_x_discrete(name ="", 
+                    limits=c("April","May","June","July","August","September","October","November","December","January","February"))
+scaredp2=scaredp2+ theme(axis.text.x = element_text(angle=90))
+
+```
+
+#### Q1-part 1: Comparision of depression and anxiety symptoms between healthy and depressed participants.
+```{r mfq-scared-q1, eval=TRUE, echo=FALSE, warning=FALSE} 
+tab_model(q1lmeHVMDD,scaredq1lmeHVMDD, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="parent-mfq-scared-q1part1.html")
+
+```
+
+#### Q1-part 2: Comparision of depression and anxiety symptoms of depressed participants before and during the pandemic.
+```{r mfq-scared-q2, eval=TRUE, echo=FALSE, warning=FALSE} 
+tab_model(mfqq2lme,scaredq2lme, dv.labels =c("Depressive Symptoms","Anxiety Symptoms"),show.re.var = FALSE, string.pred=" ", file="parent-mfq-scared-q1part2.html")
+
+```
+
+
+```{r mfq-scared-plots, eval=TRUE, echo=FALSE, warning=FALSE} 
+
+mfqp1
+mfqp2
+scaredp1
+scaredp2
+
+```
+
+
+
+### Question 2: How have behaviors and worries changed over time during the pandemic?
+```{r pscared-q2, eval=TRUE, echo=FALSE, warning=FALSE, message=FALSE} 
+models <- list()
+sleepmodels=list()
+#Lme with waves as continuse var - number of months since pandemic to match the rest of lmes
+varnames=c("p_mfq_tot","p_scared_combined_tot","p_worry_total", "p_crisis_28_sleep1", "p_crisis_28_sleep2", "p_crisis_29_exercise", "p_crisis_30_outdoors", "p_crisis_19_relationships_family", "p_crisis_21_relationships_friends","p_crisis_43_video_games", "p_crisis_42_soc_media", "p_crisis_41_tv")
+labels=c("MFQ","SCARED","Worry", "Sleep < 6", "Sleep > 10", "Exercise", "Time Spent Outdoors", "Family Relationship", "Friends Relationship","Time Spent Playing Video Games", "Social Media","TV")
+
+#since already done MFQ/SCARED, start with worry
+for(i in 3:length(varnames)){
+  y=varnames[i]
+  modellabel=labels[i]
+  someData2=behavioralData2020 %>% select(Participant, Gender, Group, p_crisis_date,y=varnames[i]) 
+  someData2$p_crisis_date=as.Date(someData2$p_crisis_date)
+  someData2$Time=as.numeric(someData2$p_crisis_date - covidTime)/30.5
+
+  someData2 = someData2 %>% filter(!is.na(y) & !is.na(Time) & !is.na(Gender) & !is.na(Group))
+
+  someData2$y=as.numeric(someData2$y)
+  someData2$Gender=toupper(someData2$Gender)
+
+  divider="####### LME with Wave Summary ##############"
+  
+  if(y=="p_crisis_28_sleep1"){
+      lmeWave=lme4::glmer(y~Gender+Group*Time+ (1+Time|Participant), family="binomial", data=someData2,control=lme4::glmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+      sleepmodels[[modellabel]]=lmeWave #skipping sleep here as the interpretation of model parameters would be different
+
+  }else if(y=="p_crisis_28_sleep2"){
+     lmeWave=lme4::glmer(y~Gender+Group*Time+ (1+Time|Participant), family="binomial", data=someData2) 
+      lmeparentSleep=lme4::allFit(lmeWave)
+      sleepmodels[[modellabel]]=lmeparentSleep[[6]] 
+  }
+    else{
+   
+    lmeWave=lmerTest::lmer(y~Gender+Group*Time+ (1+Time|Participant), data=someData2,control=lme4::lmerControl(optimizer="bobyqa",optCtrl=list(maxfun=2e5)))
+    models[[modellabel]]=lmeWave
+    
+  }
+  
+}
+
+tab_model(models$Worry, models$`Family Relationship`, models$`Friends Relationship`,sleepmodels$`Sleep < 6`, sleepmodels$`Sleep > 10`,show.re.var=FALSE,string.pred=" ",dv.labels=c("Worry", "Family Relationship", "Friend Relationship","Sleep < 6 hours", "Sleep > 10 hours"), file="parent-worry-others.html")
+tab_model(models$Exercise, models$`Time Spent Outdoors`,models$`Time Spent Playing Video Games`, models$TV, models$`Social Media`,show.re.var=FALSE,string.pred=" ",dv.labels =c("Exercise","Time Spent outdoors","Time spent playing video Games","Time Spent watching TV","Time spent on social media"), file="parent-media-others.html")
+
+```
